@@ -1,0 +1,10 @@
+{
+  "name": "予定 vs 実績",
+  "short_name": "予実管理",
+  "description": "予定と実績のギャップをAIコーチングで振り返るアプリ",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F5F0",
+  "theme_color": "#3E6259",
+  "icons": []
+}
