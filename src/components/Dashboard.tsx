@@ -1,9 +1,10 @@
 "use client";
 
 import type { ActualCandidate } from "@/lib/parse-actual";
+import { buildEstimateIndex, getHistorySinceKey } from "@/lib/estimate-reference";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DragDropContext, type DropResult } from "@hello-pangea/dnd";
-import type { ActualLog, AiReflection, ReflectionMessage, Task, WeeklyTodo } from "@/types/database";
+import type { ActualLog, AiReflection, ReflectionMessage, Task, TaskDiff, WeeklyTodo } from "@/types/database";
 import {
   buildTaskDiffs,
   computeMinutesFromRange,
@@ -47,6 +48,8 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
   const [weeklyTodos, setWeeklyTodos] = useState<WeeklyTodo[]>([]);
   const [isSynced, setIsSynced] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [autoEditActualId, setAutoEditActualId] = useState<string | null>(null);
   const [aiError, setAiError] = useState<{ message: string; hint?: string; retry: () => void } | null>(null);
 
   // ゲスト → ログインへの移行時に一度だけ走る、ローカル→クラウド同期の状態
@@ -75,8 +78,24 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
   // --------------------------------------------------------
   // 初期データ取得（日付が変わるたび）
   // --------------------------------------------------------
+  // 見積もりの参考時間用の履歴（直近90日の予定と、予定に紐づく実績）。
+  // 予定名の入力のたびには取得せず、日付の変更・データ更新時にまとめて1回取得してキャッシュする。
+  const [estimateHistory, setEstimateHistory] = useState<{ tasks: Task[]; actuals: ActualLog[] }>({
+    tasks: [],
+    actuals: []
+  });
+  const loadEstimateHistory = useCallback(async () => {
+    const since = getHistorySinceKey(toDateKey(new Date()));
+    setEstimateHistory(await adapter.listEstimateHistory(since));
+  }, [adapter]);
+  const estimateIndex = useMemo(
+    () => buildEstimateIndex(estimateHistory.tasks, estimateHistory.actuals),
+    [estimateHistory]
+  );
+
   const loadData = useCallback(async () => {
     setIsSynced(false);
+    loadEstimateHistory(); // 並行して取得（失敗しても予定・実績の表示には影響しない）
     const [taskData, actualData, reflectionData] = await Promise.all([
       adapter.listTasksByDate(dateKey),
       adapter.listActualsByDate(dateKey),
@@ -86,7 +105,7 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
     setActuals(actualData);
     setReflection(reflectionData);
     setIsSynced(true);
-  }, [adapter, dateKey]);
+  }, [adapter, dateKey, loadEstimateHistory]);
 
   useEffect(() => {
     loadData();
@@ -152,8 +171,13 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
   // --------------------------------------------------------
   // 予定 CRUD
   // --------------------------------------------------------
-  const addTask = async (title: string, startTime: string | null, endTime: string | null) => {
-    const estimated = computeMinutesFromRange(startTime, endTime);
+  const addTask = async (
+    title: string,
+    startTime: string | null,
+    endTime: string | null,
+    estimatedMinutes: number | null = null // ユーザーが選んだ所要時間（参考時間の反映など）。時間枠とは別に保存する
+  ) => {
+    const estimated = estimatedMinutes ?? computeMinutesFromRange(startTime, endTime);
     const task = await adapter.createTask({
       date: dateKey,
       title,
@@ -171,57 +195,90 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
   };
 
   const deleteTask = async (taskId: string) => {
+    // 紐づく実績は削除されず「予定外」として残る（DBは on delete set null）。事前に知らせる
+    const linkedCount = actuals.filter((a) => a.task_id === taskId).length;
+    if (
+      linkedCount > 0 &&
+      !window.confirm(`この予定に紐づく実績が${linkedCount}件あります。実績は削除されず「予定外」になります。削除しますか？`)
+    ) {
+      return;
+    }
     const ok = await adapter.deleteTask(taskId);
     if (ok) loadData();
+    else setActionError("予定の削除に失敗しました。時間をおいてもう一度お試しください。");
   };
 
   // タイトル・時間などの編集用（インライン編集モードの保存で使う汎用更新）
   const updateTask = async (id: string, patch: Partial<Task>) => {
-    // 楽観的更新（体感速度優先）
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-
     const current = tasks.find((t) => t.id === id);
+
+    // 所要時間（estimated_minutes）と時間枠（開始・終了）は別々に保存される。
+    // - 所要時間が明示的に渡されたら、そのまま保存する。
+    // - 時間枠だけが変わったときは、従来どおり時間枠から所要時間を再計算する。
+    //   ただし、現在の所要時間が時間枠と異なる値（本人が選んだ値）なら上書きしない。
     const nextStart = patch.start_time !== undefined ? patch.start_time : current?.start_time ?? null;
     const nextEnd = patch.end_time !== undefined ? patch.end_time : current?.end_time ?? null;
-    const patchWithMinutes = {
-      ...patch,
-      estimated_minutes:
-        patch.start_time !== undefined || patch.end_time !== undefined
-          ? computeMinutesFromRange(nextStart, nextEnd)
-          : patch.estimated_minutes
-    };
+    const timesChanged = patch.start_time !== undefined || patch.end_time !== undefined;
+    const currentDerived = computeMinutesFromRange(current?.start_time ?? null, current?.end_time ?? null);
+    const hasExplicitEstimate =
+      current?.estimated_minutes != null && current.estimated_minutes !== currentDerived;
 
-    await adapter.updateTask(id, patchWithMinutes);
+    const fullPatch: Partial<Task> = { ...patch };
+    if (patch.estimated_minutes === undefined && timesChanged && !hasExplicitEstimate) {
+      fullPatch.estimated_minutes = computeMinutesFromRange(nextStart, nextEnd);
+    }
+
+    // 楽観的更新（体感速度優先）
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...fullPatch } : t)));
+    await adapter.updateTask(id, fullPatch);
   };
 
   // --------------------------------------------------------
   // 実績：予定からのワンタップ転記 & 直接追加 & 編集
   // --------------------------------------------------------
+  // 予定から実績を作成する。予定に「紐づける」だけで、予定の時刻・所要時間は実績へコピーしない
+  // （実際にその時間だけ活動したかは未確認のため。時間はユーザーが入力したときだけ記録する）。
+  // 作成後は、その実績が編集状態で開き、すぐ時間を入力できる。
   const transcribeTask = async (task: Task) => {
     const actual = await adapter.createActual({
       date: dateKey,
       task_id: task.id,
       title: task.title,
-      start_time: task.start_time,
-      end_time: task.end_time,
-      actual_minutes: computeMinutesFromRange(task.start_time, task.end_time),
+      start_time: null,
+      end_time: null,
+      actual_minutes: null,
       sort_order: actuals.length
     });
-    if (actual) loadData();
+    if (actual) {
+      setAutoEditActualId(actual.id);
+      loadData();
+    } else setActionError("実績の追加に失敗しました。時間をおいてもう一度お試しください。");
   };
 
   // 予定に無かった行動を実績へ直接追加する（task_id は null のまま）
-  const addActual = async (title: string, startTime: string | null, endTime: string | null) => {
+  const addActual = async (
+    title: string,
+    startTime: string | null,
+    endTime: string | null,
+    taskId: string | null = null
+  ) => {
+    if (taskId && !tasks.some((t) => t.id === taskId)) {
+      setActionError("選択した予定が見つかりません。予定外として追加するか、選び直してください。");
+      return;
+    }
     const actual = await adapter.createActual({
       date: dateKey,
-      task_id: null,
+      task_id: taskId,
       title,
       start_time: startTime,
       end_time: endTime,
       actual_minutes: computeMinutesFromRange(startTime, endTime),
+      // フォームに本人が入力した時間は確認済み（時間を入れなければ未確認のまま）
+      time_confirmed: computeMinutesFromRange(startTime, endTime) !== null,
       sort_order: actuals.length
     });
     if (actual) loadData();
+    else setActionError("実績の追加に失敗しました。時間をおいてもう一度お試しください。");
   };
 
   /** AI一言入力の候補を一括登録。候補ごとに日付が違ってもよい。全件成功で true */
@@ -236,11 +293,14 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
       countByDate[it.date] = offset + 1;
       const created = await adapter.createActual({
         date: it.date,
-        task_id: null,
+        // 紐づけは表示中の日の予定に限る（別日付の候補には予定を紐づけない）
+        task_id: it.date === dateKey && it.task_id && tasks.some((t) => t.id === it.task_id) ? it.task_id : null,
         title: it.title,
         start_time: start,
         end_time: end,
         actual_minutes: computeMinutesFromRange(start, end) ?? it.duration_minutes,
+        // 候補カードで本人が内容を確認して登録した時間は確認済み
+        time_confirmed: (computeMinutesFromRange(start, end) ?? it.duration_minutes) !== null,
         sort_order: baseOrder + offset
       });
       if (!created) allOk = false;
@@ -250,23 +310,45 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
   };
 
   const updateActual = async (id: string, patch: Partial<ActualLog>) => {
-    // 楽観的更新（体感速度優先）
-    setActuals((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
-
     const current = actuals.find((a) => a.id === id);
-    const nextStart = patch.start_time !== undefined ? patch.start_time : current?.start_time ?? null;
-    const nextEnd = patch.end_time !== undefined ? patch.end_time : current?.end_time ?? null;
-    const patchWithMinutes = {
-      ...patch,
-      actual_minutes: computeMinutesFromRange(nextStart, nextEnd)
-    };
+    if (!current) return;
 
-    await adapter.updateActual(id, patchWithMinutes);
+    // 予定の付け替え: 同じ日の予定にだけ紐づけられる（日付をまたいだ紐づけは行わない）
+    if (patch.task_id) {
+      const target = tasks.find((t) => t.id === patch.task_id);
+      if (!target || target.date !== current.date) {
+        setActionError("この実績と同じ日の予定にだけ紐づけできます。");
+        return;
+      }
+    }
+
+    // 時間（開始・終了）が変わるときだけ所要分を再計算する。
+    // メモや予定の付け替えでは actual_minutes を触らない（AI一言入力の「所要時間のみ」実績を消さないため）
+    const timeChanged = patch.start_time !== undefined || patch.end_time !== undefined;
+    const fullPatch: Partial<ActualLog> = { ...patch };
+    if (timeChanged) {
+      const nextStart = patch.start_time !== undefined ? patch.start_time : current.start_time;
+      const nextEnd = patch.end_time !== undefined ? patch.end_time : current.end_time;
+      // 開始・終了が揃っていればそこから計算。揃っていなければ、ユーザーが入力した所要時間（無ければ未入力）
+      fullPatch.actual_minutes =
+        computeMinutesFromRange(nextStart, nextEnd) ?? patch.actual_minutes ?? null;
+    }
+
+    // 楽観的更新（体感速度優先）。失敗したら元に戻す
+    setActuals((prev) => prev.map((a) => (a.id === id ? { ...a, ...fullPatch } : a)));
+    const ok = await adapter.updateActual(id, fullPatch);
+    if (!ok) {
+      setActuals((prev) => prev.map((a) => (a.id === id ? current : a)));
+      setActionError("実績の更新に失敗しました。変更を元に戻しました。");
+    } else if (fullPatch.time_confirmed !== undefined || timeChanged) {
+      loadEstimateHistory(); // 確認状態・時間が変わったら参考時間の元データを更新
+    }
   };
 
   const deleteActual = async (id: string) => {
     const ok = await adapter.deleteActual(id);
     if (ok) loadData();
+    else setActionError("実績の削除に失敗しました。時間をおいてもう一度お試しください。");
   };
 
   // --------------------------------------------------------
@@ -398,10 +480,11 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
   // 差分計算
   // --------------------------------------------------------
   const diffs = useMemo(() => buildTaskDiffs(tasks, actuals), [tasks, actuals]);
-  const transcribedTaskIds = useMemo(
-    () => new Set(actuals.filter((a) => a.task_id).map((a) => a.task_id!)),
-    [actuals]
-  );
+  const diffsByTaskId = useMemo(() => {
+    const m = new Map<string, TaskDiff>();
+    for (const d of diffs) if (d.task) m.set(d.task.id, d);
+    return m;
+  }, [diffs]);
 
   // --------------------------------------------------------
   // AIコーチング
@@ -411,12 +494,12 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
       .filter((d) => d.task || d.actual)
       .map((d) => {
         const title = d.task?.title ?? d.actual?.title ?? "(不明)";
-        const est = d.task?.estimated_minutes;
-        const actualMin = d.actual?.actual_minutes;
         const diffText = d.diffMinutes !== null ? formatMinutes(d.diffMinutes) : "データ不足";
-        return `・${title}: 予定${est ?? "―"}分 / 実績${actualMin ?? "―"}分 / 差分${diffText}${
-          d.actual?.memo ? ` / メモ: ${d.actual.memo}` : ""
-        }`;
+        const memos = d.actuals.map((a) => a.memo).filter(Boolean).join(" / ");
+        const state = !d.task ? "（予定外）" : d.actuals.length === 0 ? "（実績未記録）" : "";
+        return `・${title}${state}: 予定${d.estimatedMinutes ?? "―"}分 / 実績${d.actualMinutes ?? "―"}分${
+          d.actuals.length > 1 ? `（${d.actuals.length}回に分けて実施）` : ""
+        } / 差分${diffText}${memos ? ` / メモ: ${memos}` : ""}`;
       })
       .join("\n");
   };
@@ -540,6 +623,18 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
           isSynced={isSynced}
         />
 
+        {actionError && (
+          <div
+            role="alert"
+            className="mx-4 mt-4 flex items-center justify-between gap-2 rounded-lg border border-over/30 bg-over/5 px-3 py-2 text-xs text-over"
+          >
+            <span>{actionError}</span>
+            <button onClick={() => setActionError(null)} aria-label="閉じる" className="opacity-60 hover:opacity-100">
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* ゲスト→ログイン移行時の同期状況バナー */}
         {syncing && (
           <div className="mx-4 mt-4 flex items-center gap-2 rounded-lg border border-plan/30 bg-plan/5 px-3 py-2 text-xs text-plan">
@@ -574,14 +669,19 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
               onUpdate={updateTask}
               onDelete={deleteTask}
               onTranscribe={transcribeTask}
-              transcribedTaskIds={transcribedTaskIds}
+              diffsByTaskId={diffsByTaskId}
+              estimateIndex={estimateIndex}
             />
             <ActualTimeline
               actuals={actuals}
+              tasks={tasks}
+              currentDate={dateKey}
               onAdd={addActual}
               onAddBulk={addActualsBulk}
               onUpdate={updateActual}
               onDelete={deleteActual}
+              autoEditId={autoEditActualId}
+              onAutoEditHandled={() => setAutoEditActualId(null)}
             />
           </div>
 

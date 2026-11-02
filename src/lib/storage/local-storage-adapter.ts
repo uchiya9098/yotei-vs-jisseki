@@ -1,6 +1,7 @@
 "use client";
 
 import type { ActualLog, AiReflection, ReflectionMessage, Task, WeeklyTodo } from "@/types/database";
+import { normalizeActual } from "@/lib/actual-normalize";
 import type { NewActualInput, NewTaskInput, NewWeeklyTodoInput, StorageAdapter } from "./types";
 
 // すべてのゲストデータはこのブラウザの localStorage 上、固定キーの下にJSON配列として保存する。
@@ -97,6 +98,7 @@ export function createLocalStorageAdapter(): StorageAdapter {
     async listActualsByDate(date) {
       return readArray<ActualLog>(LOCAL_STORAGE_KEYS.actuals)
         .filter((a) => a.date === date)
+        .map(normalizeActual) // 理由・確認済みが無い既存データは未選択/未確認として返す（保存データは書き換えない）
         .sort((a, b) => a.sort_order - b.sort_order);
     },
     async createActual(input: NewActualInput) {
@@ -105,6 +107,8 @@ export function createLocalStorageAdapter(): StorageAdapter {
         id: newId(),
         user_id: GUEST_USER_ID,
         memo: null,
+        variance_reasons: [],
+        time_confirmed: false,
         created_at: nowIso(),
         updated_at: nowIso(),
         ...input
@@ -128,6 +132,15 @@ export function createLocalStorageAdapter(): StorageAdapter {
         actuals.filter((a) => a.id !== id)
       );
       return true;
+    },
+
+    // ---------------- 見積もり参考用の履歴 ----------------
+    async listEstimateHistory(sinceDate) {
+      const tasks = readArray<Task>(LOCAL_STORAGE_KEYS.tasks).filter((t) => t.date >= sinceDate);
+      const actuals = readArray<ActualLog>(LOCAL_STORAGE_KEYS.actuals)
+        .filter((a) => a.date >= sinceDate && a.task_id)
+        .map(normalizeActual);
+      return { tasks, actuals };
     },
 
     // ---------------- 今週のToDo ----------------

@@ -1,5 +1,6 @@
 "use client";
 
+import { normalizeActual } from "@/lib/actual-normalize";
 import { createClient } from "@/lib/supabase/client";
 import type { ReflectionMessage } from "@/types/database";
 import type { NewActualInput, NewTaskInput, NewWeeklyTodoInput, StorageAdapter } from "./types";
@@ -67,7 +68,8 @@ export function createSupabaseStorageAdapter(userId: string): StorageAdapter {
         console.error("実績の取得に失敗しました:", error);
         return [];
       }
-      return data ?? [];
+      // 005/006未適用のDBでも「理由未選択・時間未確認」として扱えるよう保証する
+      return (data ?? []).map(normalizeActual);
     },
     async createActual(input: NewActualInput) {
       const { data, error } = await supabase
@@ -96,6 +98,25 @@ export function createSupabaseStorageAdapter(userId: string): StorageAdapter {
         return false;
       }
       return true;
+    },
+
+    // ---------------- 見積もり参考用の履歴 ----------------
+    // 直近の期間だけを2クエリで取得（予定入力のたびには呼ばない。呼び出し側でキャッシュする）
+    async listEstimateHistory(sinceDate) {
+      const [tasksRes, actualsRes] = await Promise.all([
+        supabase.from("tasks").select("*").eq("user_id", userId).gte("date", sinceDate),
+        supabase
+          .from("actual_logs")
+          .select("*")
+          .eq("user_id", userId)
+          .gte("date", sinceDate)
+          .not("task_id", "is", null)
+      ]);
+      if (tasksRes.error || actualsRes.error) {
+        console.error("見積もり参考用の履歴の取得に失敗しました:", tasksRes.error ?? actualsRes.error);
+        return { tasks: [], actuals: [] };
+      }
+      return { tasks: tasksRes.data ?? [], actuals: (actualsRes.data ?? []).map(normalizeActual) };
     },
 
     // ---------------- 今週のToDo ----------------

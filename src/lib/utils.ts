@@ -44,36 +44,68 @@ export function formatMinutes(min: number | null): string {
   return `${sign}${h}時間${m > 0 ? `${m}分` : ""}`;
 }
 
-// 予定と実績をタスク単位でペアリングし、差分を計算する
+// 実績1件の所要分。記録済みの actual_minutes を優先し、無ければ開始・終了から計算。どちらも無ければ null（推測しない）
+export function getActualMinutes(a: ActualLog): number | null {
+  return a.actual_minutes ?? computeMinutesFromRange(a.start_time, a.end_time);
+}
+
+// 予定と実績をタスク単位でペアリングし、差分を計算する。
+// - 1つの予定に複数の実績を紐づけられる（合計して比較）。
+// - 実績の時間が未入力なら差分は出さない。一部のみ未入力のときも誤解を避けるため差分は出さない。
+// - task_id が指す予定がこの一覧に無い実績（削除済み・範囲外など）は「予定外」として扱い、欠落させない。
 export function buildTaskDiffs(tasks: Task[], actuals: ActualLog[]): TaskDiff[] {
-  const actualByTaskId = new Map<string, ActualLog>();
+  const taskIds = new Set(tasks.map((t) => t.id));
+  const actualsByTaskId = new Map<string, ActualLog[]>();
   const unlinkedActuals: ActualLog[] = [];
 
   for (const a of actuals) {
-    if (a.task_id) {
-      actualByTaskId.set(a.task_id, a);
+    if (a.task_id && taskIds.has(a.task_id)) {
+      const list = actualsByTaskId.get(a.task_id) ?? [];
+      list.push(a);
+      actualsByTaskId.set(a.task_id, list);
     } else {
       unlinkedActuals.push(a);
     }
   }
 
   const diffs: TaskDiff[] = tasks.map((task) => {
-    const actual = actualByTaskId.get(task.id) ?? null;
+    const linked = actualsByTaskId.get(task.id) ?? [];
     const estimated =
       task.estimated_minutes ?? computeMinutesFromRange(task.start_time, task.end_time);
-    const actualMinutes =
-      actual?.actual_minutes ??
-      (actual ? computeMinutesFromRange(actual.start_time, actual.end_time) : null);
+
+    const minutesList = linked.map(getActualMinutes);
+    const known = minutesList.filter((m): m is number => m !== null);
+    const actualMinutes = known.length > 0 ? known.reduce((s, m) => s + m, 0) : null;
+    const actualPartial = known.length > 0 && known.length < linked.length;
 
     const diffMinutes =
-      estimated !== null && actualMinutes !== null ? actualMinutes - estimated : null;
+      estimated !== null && actualMinutes !== null && !actualPartial
+        ? actualMinutes - estimated
+        : null;
 
-    return { task, actual, diffMinutes };
+    return {
+      task,
+      actual: linked[0] ?? null,
+      actuals: linked,
+      estimatedMinutes: estimated,
+      actualMinutes,
+      actualPartial,
+      diffMinutes
+    };
   });
 
-  // 予定に紐づかない実績（後から手動追加したもの等）も表示対象に含める
+  // 予定に紐づかない実績（予定外）も表示対象に含める
   for (const a of unlinkedActuals) {
-    diffs.push({ task: null, actual: a, diffMinutes: null });
+    const m = getActualMinutes(a);
+    diffs.push({
+      task: null,
+      actual: a,
+      actuals: [a],
+      estimatedMinutes: null,
+      actualMinutes: m,
+      actualPartial: false,
+      diffMinutes: null
+    });
   }
 
   return diffs;
