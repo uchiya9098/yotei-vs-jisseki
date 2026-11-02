@@ -18,6 +18,7 @@ export type NewActualInput = {
   end_time: string | null;
   actual_minutes: number | null;
   sort_order: number;
+  time_confirmed?: boolean; // 省略時は未確認。ユーザーが時間を入力・確認した作成時だけ true
 };
 
 export type NewWeeklyTodoInput = {
@@ -49,6 +50,9 @@ export interface StorageAdapter {
   createActual(input: NewActualInput): Promise<ActualLog | null>;
   updateActual(id: string, patch: Partial<ActualLog>): Promise<boolean>;
   deleteActual(id: string): Promise<boolean>;
+
+  // 見積もりの参考時間用。sinceDate 以降の予定と、予定に紐づく実績だけを返す（全履歴は読まない）
+  listEstimateHistory(sinceDate: string): Promise<{ tasks: Task[]; actuals: ActualLog[] }>;
 
   // 今週のToDo（weekly_todos）
   listWeeklyTodos(weekStart: string): Promise<WeeklyTodo[]>;

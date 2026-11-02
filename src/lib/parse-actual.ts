@@ -11,6 +11,7 @@ export type ActualCandidate = {
   end_time: string; // HH:mm or ""
   duration_minutes: number | null; // 時刻が無い場合の所要時間（「2時間」など）
   category: string; // 表示用ラベル（DBには保存しない）
+  task_id?: string | null; // 紐づける予定（ユーザーがモーダルで選択。AIは設定しない）
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;

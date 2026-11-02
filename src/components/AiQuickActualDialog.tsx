@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Loader2, Mic, MicOff, Sparkles, Trash2, X } from "lucide-react";
 import type { ActualCandidate } from "@/lib/parse-actual";
+import type { Task } from "@/types/database";
 import { cn, toDateKey } from "@/lib/utils";
 
 type Card = ActualCandidate & { id: number; selected: boolean; saved: boolean };
@@ -10,6 +11,9 @@ type Card = ActualCandidate & { id: number; selected: boolean; saved: boolean };
 type Props = {
   /** 候補を実績として保存する。全件成功なら true */
   onRegister: (items: ActualCandidate[]) => Promise<boolean>;
+  /** 表示中の日の予定。候補を予定に紐づけるために使う */
+  tasks?: Task[];
+  currentDate?: string;
 };
 
 const EXAMPLES = ["今日は15時から17時までプログラミングの勉強をした", "午前中は面接対策の準備を2時間やった"];
@@ -36,7 +40,7 @@ function createRecognition(): SpeechRec | null {
   return rec;
 }
 
-export default function AiQuickActualDialog({ onRegister }: Props) {
+export default function AiQuickActualDialog({ onRegister, tasks = [], currentDate }: Props) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [parsing, setParsing] = useState(false);
@@ -160,7 +164,11 @@ export default function AiQuickActualDialog({ onRegister }: Props) {
     setSaving(true);
     setError(null);
     const ok = await onRegister(
-      valid.map(({ id, selected, saved, ...c }) => ({ ...c, title: c.title.trim() }))
+      valid.map(({ id, selected, saved, ...c }) => ({
+        ...c,
+        title: c.title.trim(),
+        task_id: c.date === currentDate ? c.task_id ?? null : null
+      }))
     );
     setSaving(false);
     if (!ok) {
@@ -333,7 +341,7 @@ export default function AiQuickActualDialog({ onRegister }: Props) {
                           type="date"
                           value={c.date}
                           disabled={c.saved}
-                          onChange={(e) => e.target.value && patchCard(c.id, { date: e.target.value })}
+                          onChange={(e) => e.target.value && patchCard(c.id, { date: e.target.value, task_id: null })}
                           className={fieldCls}
                           aria-label="日付"
                         />
@@ -372,6 +380,21 @@ export default function AiQuickActualDialog({ onRegister }: Props) {
                             />
                             分
                           </label>
+                        )}
+                        {!c.saved && tasks.length > 0 && c.date === currentDate && (
+                          <select
+                            value={c.task_id ?? ""}
+                            onChange={(e) => patchCard(c.id, { task_id: e.target.value || null })}
+                            className={cn(fieldCls, "max-w-[9rem] truncate")}
+                            aria-label="対応する予定"
+                          >
+                            <option value="">予定外</option>
+                            {tasks.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.title}
+                              </option>
+                            ))}
+                          </select>
                         )}
                         {!c.saved && (
                           <button

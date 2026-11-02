@@ -54,12 +54,21 @@ export default function DiffSummary({ diffs }: Props) {
         {diffs.map((d, i) => {
           const label = d.task?.title ?? d.actual?.title ?? "";
           const diff = d.diffMinutes;
+          const unrecorded = !!d.task && d.actuals.length === 0;
+          const unplanned = !d.task;
           return (
             <li
               key={d.task?.id ?? d.actual?.id ?? i}
               className="flex items-center justify-between rounded-lg border border-line px-3 py-2 text-sm"
             >
-              <span className="truncate text-ink/80">{label}</span>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate text-ink/80">{label}</span>
+                {unplanned && (
+                  <span className="shrink-0 rounded-full border border-dashed border-line px-1.5 text-[10px] text-ink/40">
+                    予定外
+                  </span>
+                )}
+              </span>
               <span
                 className={cn(
                   "shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold",
@@ -69,7 +78,7 @@ export default function DiffSummary({ diffs }: Props) {
                   diff === 0 && "bg-plan/10 text-plan"
                 )}
               >
-                {diff === null ? "―" : diff === 0 ? "予定通り" : `${diff > 0 ? "+" : ""}${formatMinutes(diff)}`}
+                {diff === null ? (unrecorded ? "未記録" : "―") : diff === 0 ? "予定通り" : `${diff > 0 ? "+" : ""}${formatMinutes(diff)}`}
               </span>
             </li>
           );

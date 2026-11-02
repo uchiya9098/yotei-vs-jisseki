@@ -78,6 +78,8 @@ create table if not exists public.actual_logs (
   end_time time,
   actual_minutes integer,
   memo text,
+  variance_reasons text[] not null default '{}', -- ズレの理由キー（005で追加。固定キーのみ）
+  time_confirmed boolean not null default false, -- 実績時間を本人が入力・確認済みか（006で追加）
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

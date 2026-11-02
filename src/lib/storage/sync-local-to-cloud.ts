@@ -1,6 +1,7 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/client";
+import { normalizeActual } from "@/lib/actual-normalize";
 import { clearAllLocalData, getAllLocalData, hasAnyLocalData } from "./local-storage-adapter";
 
 export { hasAnyLocalData };
@@ -40,7 +41,8 @@ export async function syncLocalDataToCloud(userId: string): Promise<SyncResult> 
   }
 
   if (local.actuals.length > 0) {
-    const rows = local.actuals.map((a) => ({ ...a, user_id: userId }));
+    // ズレの理由・時間の確認状態も一緒にアップロード（項目の無い古いローカルデータは未選択/未確認）。要: マイグレーション005・006
+    const rows = local.actuals.map((a) => ({ ...normalizeActual(a), user_id: userId }));
     const { error } = await supabase.from("actual_logs").upsert(rows, { onConflict: "id" });
     if (error) console.error("実績の同期に失敗しました:", error);
     else result.actuals = rows.length;

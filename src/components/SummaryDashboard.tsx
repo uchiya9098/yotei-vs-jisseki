@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, CalendarDays, ChevronLeft, ChevronRight, Loader2, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -20,6 +20,8 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import MarkdownExportDialog from "@/components/MarkdownExportDialog";
+import WeeklyInsights from "@/components/WeeklyInsights";
+import { computeWeeklyInsights } from "@/lib/weekly-insights";
 
 export default function SummaryDashboard({ userId }: { userId: string }) {
   const supabase = useMemo(() => createClient(), []);
@@ -43,7 +45,11 @@ export default function SummaryDashboard({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
 
+  // 週・月を素早く切り替えたとき、遅れて返った前の期間の結果で上書きしないための通し番号
+  const loadIdRef = useRef(0);
+
   const loadData = useCallback(async () => {
+    const loadId = ++loadIdRef.current;
     setLoading(true);
     const [{ data: taskData }, { data: actualData }, { data: reflectionData }, { data: summaryData }] =
       await Promise.all([
@@ -77,6 +83,8 @@ export default function SummaryDashboard({ userId }: { userId: string }) {
           .maybeSingle()
       ]);
 
+    if (loadId !== loadIdRef.current) return; // より新しい読み込みが始まっている
+
     setTasks(taskData ?? []);
     setActuals(actualData ?? []);
     setReflectionTexts(
@@ -95,6 +103,8 @@ export default function SummaryDashboard({ userId }: { userId: string }) {
   }, [loadData]);
 
   const diffs = useMemo(() => buildTaskDiffs(tasks, actuals), [tasks, actuals]);
+  // 週次の振り返り（毎回この週のデータから計算。保存しないので、週を切り替えても古い結果は残らない）
+  const weeklyInsights = useMemo(() => computeWeeklyInsights(tasks, actuals, diffs), [tasks, actuals, diffs]);
 
   const stats = useMemo(() => {
     const totalActualMinutes = actuals.reduce((sum, a) => sum + (a.actual_minutes ?? 0), 0);
@@ -152,8 +162,14 @@ export default function SummaryDashboard({ userId }: { userId: string }) {
         .map((d) => {
           const title = d.task?.title ?? d.actual?.title ?? "(不明)";
           const date = d.task?.date ?? d.actual?.date ?? "";
-          const diffText = d.diffMinutes !== null ? formatMinutes(d.diffMinutes) : "データ不足";
-          return `[${date}] ${title}: 差分${diffText}${d.actual?.memo ? ` / メモ: ${d.actual.memo}` : ""}`;
+          const diffText =
+            d.diffMinutes !== null
+              ? formatMinutes(d.diffMinutes)
+              : d.task && d.actuals.length === 0
+              ? "未記録"
+              : "データ不足";
+          const memos = d.actuals.map((a) => a.memo).filter(Boolean).join(" / ");
+          return `[${date}] ${title}${d.task ? "" : "（予定外）"}: 差分${diffText}${memos ? ` / メモ: ${memos}` : ""}`;
         })
         .join("\n");
 
@@ -306,6 +322,9 @@ ${reflectionTexts.join("\n") || "（振り返り対話なし）"}`;
                 <p className="mt-0.5 text-[10px] text-under">{formatMinutes(stats.totalUnder)} 短縮</p>
               </div>
             </div>
+
+            {/* 週次の振り返り（週表示のみ。月表示は従来どおり） */}
+            {mode === "week" && <WeeklyInsights key={rangeStartKey} insights={weeklyInsights} />}
 
             {/* 日別ブレークダウン */}
             {dailyBreakdown.length > 0 && (

@@ -114,16 +114,28 @@ export default function MarkdownExportDialog({ userId }: { userId: string }) {
         lines.push("| タスク名 | 予定時間 | 実績時間 | 差分 | メモ |");
         lines.push("|---|---|---|---|---|");
         for (const d of dayDiffs) {
-          const name = sanitizeForTable(d.task?.title ?? d.actual?.title ?? "(不明)");
-          const estimated = d.task?.estimated_minutes ?? null;
-          const actualMin = d.actual?.actual_minutes ?? null;
+          const name = sanitizeForTable(
+            `${d.task?.title ?? d.actual?.title ?? "(不明)"}${d.task ? "" : "（予定外）"}`
+          );
+          const estimated = d.estimatedMinutes;
+          const actualText = !d.task
+            ? formatMinutes(d.actualMinutes)
+            : d.actuals.length === 0
+            ? "未記録"
+            : d.actualMinutes === null
+            ? "時間未入力"
+            : `${formatMinutes(d.actualMinutes)}${d.actualPartial ? "（一部時間未入力）" : ""}${
+                d.actuals.length > 1 ? `（${d.actuals.length}回）` : ""
+              }`;
           const diffText =
             d.diffMinutes !== null
               ? `${d.diffMinutes > 0 ? "+" : ""}${formatMinutes(d.diffMinutes)}`
               : "―";
-          const memo = sanitizeForTable(d.actual?.memo ?? "");
+          const memo = sanitizeForTable(
+            d.actuals.map((a) => a.memo).filter(Boolean).join(" / ")
+          );
           lines.push(
-            `| ${name} | ${formatMinutes(estimated)} | ${formatMinutes(actualMin)} | ${diffText} | ${memo} |`
+            `| ${name} | ${formatMinutes(estimated)} | ${actualText} | ${diffText} | ${memo} |`
           );
         }
       }

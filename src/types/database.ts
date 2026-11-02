@@ -22,6 +22,8 @@ export type ActualLog = {
   end_time: string | null;
   actual_minutes: number | null;
   memo: string | null;
+  variance_reasons: string[]; // ズレの理由キー（lib/variance-reasons.ts）。未選択は []
+  time_confirmed: boolean; // 実績時間を本人が入力・確認したか。既存データは false（見積もりの参考には使わない）
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -45,9 +47,13 @@ export type AiReflection = {
 
 // task / actual_log をペアにして差分表示するためのビューモデル
 export type TaskDiff = {
-  task: Task | null;
-  actual: ActualLog | null;
-  diffMinutes: number | null; // actual - estimated
+  task: Task | null; // null = 予定に紐づかない実績（予定外）
+  actual: ActualLog | null; // 代表の実績（最初の1件）。複数あるときは actuals を参照
+  actuals: ActualLog[]; // この予定に紐づく全ての実績（中断・再開で複数になりうる）
+  estimatedMinutes: number | null; // 予定時間（未設定ならnull）
+  actualMinutes: number | null; // 紐づく実績の合計。時間が1件も記録されていなければnull（推測しない）
+  actualPartial: boolean; // 一部の実績が時間未入力（この場合は差分を出さない）
+  diffMinutes: number | null; // actual - estimated。両方が確定しているときだけ値を持つ
 };
 
 export type PeriodMode = "week" | "month";
