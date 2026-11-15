@@ -45,7 +45,7 @@ export default function DiffSummary({ diffs }: Props) {
         </div>
       </div>
 
-      <ul className="space-y-1.5">
+      <ul className="scrollbar-thin max-h-72 space-y-1.5 overflow-y-auto overscroll-contain pr-0.5">
         {diffs.length === 0 && (
           <li className="rounded-lg bg-paper px-3 py-6 text-center text-xs text-ink/40">
             予定と実績が揃うとここに差分が出ます

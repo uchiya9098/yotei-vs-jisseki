@@ -27,11 +27,22 @@ export default function AiCoachChat({
   onSendMessage
 }: Props) {
   const [input, setInput] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const prevCountRef = useRef<number | null>(null);
 
+  // 新しいメッセージや「考え中」表示が増えたときだけ、チャット欄の中を最下部へスクロールする。
+  // 以前は scrollIntoView で毎回ページ全体が動き（しかも依存の messages が毎レンダーで新しい配列だったため
+  // 予定・実績を操作するたびに発火）、画面が大きくジャンプしていた。
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
+    const el = scrollerRef.current;
+    if (!el) return;
+    const prev = prevCountRef.current;
+    prevCountRef.current = messages.length;
+    const grew = prev === null ? messages.length > 0 : messages.length > prev;
+    if (!grew && !isLoading) return;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({ top: el.scrollHeight, behavior: prev === null || reduced ? "auto" : "smooth" });
+  }, [messages.length, isLoading]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,7 +58,7 @@ export default function AiCoachChat({
         <h2 className="font-display text-sm font-bold text-ink/70">AIコーチング</h2>
       </div>
 
-      <div className="scrollbar-thin flex-1 space-y-3 overflow-y-auto pr-1">
+      <div ref={scrollerRef} className="scrollbar-thin flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
         {messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-4 text-center">
             <p className="text-xs text-ink/40">
@@ -93,7 +104,6 @@ export default function AiCoachChat({
             </div>
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
 
       {error && (

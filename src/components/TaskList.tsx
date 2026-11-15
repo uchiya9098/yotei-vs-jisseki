@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Draggable, Droppable } from "@hello-pangea/dnd";
-import { Check, CornerDownRight, GripVertical, Pencil, Plus, Trash2, X } from "lucide-react";
+import { CornerDownRight, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import type { Task, TaskDiff } from "@/types/database";
 import { computeMinutesFromRange, cn, formatMinutes, getActualMinutes } from "@/lib/utils";
+import Collapse from "@/components/ui/collapse";
+import EditSheet from "@/components/ui/edit-sheet";
 import {
   formatReferencePeriod,
   getEstimateReference,
@@ -25,36 +27,44 @@ function EstimateHint({
   rangeMinutes: number | null;
   onApply: (minutes: number) => void;
 }) {
-  const ref = getEstimateReference(index, title);
-  if (!ref) return null; // 記録が足りない・候補なしのときは何も表示しない
+  const found = getEstimateReference(index, title);
+  // 候補が消えるときも、直前の内容を表示したまま短くたたむ（入力中に下の項目が一瞬で動かないように）
+  const lastRef = useRef(found);
+  if (found) lastRef.current = found;
+  const ref = found ?? lastRef.current;
   return (
-    <div className="rounded-lg border border-plan/20 bg-plan/5 px-2.5 py-2 text-[11px] text-ink/70">
-      <p>
-        過去{ref.count}回の実績（{formatReferencePeriod(ref)}）の中央値:{" "}
-        <span className="font-semibold text-plan">{formatMinutes(ref.median)}</span>
-      </p>
-      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-        {currentMinutes === ref.median ? (
-          <span className="text-ink/40">入力中の時間と同じです</span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => onApply(ref.median)}
-            className="rounded-full border border-plan/40 bg-white px-2.5 py-1 font-semibold text-plan transition hover:bg-plan/10"
-          >
-            {currentMinutes === null
-              ? "この時間を予定に使う"
-              : `所要時間を ${formatMinutes(currentMinutes)} → ${formatMinutes(ref.median)} に変更`}
-          </button>
-        )}
-        <span className="text-[10px] text-ink/40">確認済みの実績時間から計算した参考値です</span>
-      </div>
-      {rangeMinutes !== null && rangeMinutes !== ref.median && (
-        <p className="mt-1 text-[10px] text-ink/50">
-          開始・終了の時間枠（{formatMinutes(rangeMinutes)}）は変わりません。反映すると時間枠と所要時間が異なります。
-        </p>
+    <Collapse open={!!found}>
+      {ref && (
+        <div className="rounded-lg border border-plan/20 bg-plan/5 px-2.5 py-2 text-[11px] text-ink/70">
+          <p>
+            過去{ref.count}回の実績（{formatReferencePeriod(ref)}）の中央値:{" "}
+            <span className="font-semibold text-plan">{formatMinutes(ref.median)}</span>
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            {currentMinutes === ref.median ? (
+              <span className="text-ink/40">入力中の時間と同じです</span>
+            ) : (
+              <button
+                type="button"
+                tabIndex={found ? 0 : -1}
+                onClick={() => onApply(ref.median)}
+                className="rounded-full border border-plan/40 bg-white px-2.5 py-1 font-semibold text-plan transition hover:bg-plan/10"
+              >
+                {currentMinutes === null
+                  ? "この時間を予定に使う"
+                  : `所要時間を ${formatMinutes(currentMinutes)} → ${formatMinutes(ref.median)} に変更`}
+              </button>
+            )}
+            <span className="text-[10px] text-ink/40">確認済みの実績時間から計算した参考値です</span>
+          </div>
+          {rangeMinutes !== null && rangeMinutes !== ref.median && (
+            <p className="mt-1 text-[10px] text-ink/50">
+              開始・終了の時間枠（{formatMinutes(rangeMinutes)}）は変わりません。反映すると時間枠と所要時間が異なります。
+            </p>
+          )}
+        </div>
       )}
-    </div>
+    </Collapse>
   );
 }
 
@@ -183,11 +193,12 @@ export default function TaskList({
             <Plus size={18} />
           </button>
         </div>
-        {showTimeInputs && (
-          <div className="flex items-center gap-2 text-sm text-ink/60">
+        <Collapse open={showTimeInputs}>
+          <div className="flex items-center gap-2 p-0.5 text-sm text-ink/60">
             <input
               type="time"
               value={startTime}
+              tabIndex={showTimeInputs ? 0 : -1}
               onChange={(e) => setStartTime(e.target.value)}
               className="rounded-lg border border-line bg-paper px-2 py-1.5"
             />
@@ -195,11 +206,12 @@ export default function TaskList({
             <input
               type="time"
               value={endTime}
+              tabIndex={showTimeInputs ? 0 : -1}
               onChange={(e) => setEndTime(e.target.value)}
               className="rounded-lg border border-line bg-paper px-2 py-1.5"
             />
           </div>
-        )}
+        </Collapse>
         <EstimateHint
           title={title}
           index={estimateIndex}
@@ -207,12 +219,13 @@ export default function TaskList({
           rangeMinutes={computeMinutesFromRange(startTime || null, endTime || null)}
           onApply={setEstimate}
         />
-        {estimate !== null && (
-          <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-ink/60">
+        <Collapse open={estimate !== null}>
+          <p className="flex flex-wrap items-center gap-1.5 p-0.5 text-[11px] text-ink/60">
             <span className="rounded-full bg-plan/10 px-2 py-0.5 font-semibold text-plan">
-              所要時間 {formatMinutes(estimate)}
+              所要時間 {estimate !== null ? formatMinutes(estimate) : ""}
             </span>
-            {computeMinutesFromRange(startTime || null, endTime || null) !== null &&
+            {estimate !== null &&
+              computeMinutesFromRange(startTime || null, endTime || null) !== null &&
               computeMinutesFromRange(startTime || null, endTime || null) !== estimate && (
                 <span className="text-ink/50">
                   （時間枠は{formatMinutes(computeMinutesFromRange(startTime || null, endTime || null))}で、所要時間と異なります）
@@ -220,13 +233,14 @@ export default function TaskList({
               )}
             <button
               type="button"
+              tabIndex={estimate !== null ? 0 : -1}
               onClick={() => setEstimate(null)}
               className="text-ink/40 underline hover:text-ink"
             >
               取り消す
             </button>
           </p>
-        )}
+        </Collapse>
       </form>
 
       <Droppable droppableId="task-list">
@@ -254,14 +268,15 @@ export default function TaskList({
                     <li
                       ref={draggableProvided.innerRef}
                       {...draggableProvided.draggableProps}
+                      data-row-id={`task-${task.id}`}
                       className={cn(
                         "group rounded-lg border border-line bg-white px-2 py-2 transition",
                         snapshot.isDragging && "shadow-md ring-1 ring-plan/30",
                         isEditing && "ring-1 ring-plan/40"
                       )}
                     >
-                      {isEditing ? (
-                        <div className="space-y-1.5 pl-0.5">
+                      <EditSheet open={isEditing} title="予定を編集" onClose={cancelEdit}>
+                        <div className="space-y-3">
                           <EstimateHint
                             title={editTitle}
                             index={estimateIndex}
@@ -273,63 +288,71 @@ export default function TaskList({
                             rangeMinutes={computeMinutesFromRange(editStart || null, editEnd || null)}
                             onApply={(m) => setEditEstimate(String(m))}
                           />
-                          <input
-                            autoFocus
-                            value={editTitle}
-                            onChange={(e) => setEditTitle(e.target.value)}
-                            onKeyDown={handleEditKeyDown}
-                            className="w-full rounded-md border border-plan/40 bg-paper px-2 py-1 text-sm text-ink outline-none"
-                          />
-                          <div className="flex items-center gap-2">
+                          <label className="block text-xs text-ink/50">
+                            予定名
                             <input
-                              type="time"
-                              value={editStart}
-                              onChange={(e) => setEditStart(e.target.value)}
+                              data-autofocus
+                              value={editTitle}
+                              onChange={(e) => setEditTitle(e.target.value)}
                               onKeyDown={handleEditKeyDown}
-                              className="rounded-md border border-line bg-paper px-1.5 py-1 text-xs"
+                              className="mt-1 w-full rounded-md border border-plan/40 bg-paper px-2 py-1.5 text-sm text-ink outline-none"
                             />
-                            <span className="text-xs text-ink/40">〜</span>
-                            <input
-                              type="time"
-                              value={editEnd}
-                              onChange={(e) => setEditEnd(e.target.value)}
-                              onKeyDown={handleEditKeyDown}
-                              className="rounded-md border border-line bg-paper px-1.5 py-1 text-xs"
-                            />
-                            <label className="flex items-center gap-1 text-xs text-ink/50">
+                          </label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="block text-xs text-ink/50">
+                              開始
                               <input
-                                type="number"
-                                min={1}
-                                max={1440}
-                                inputMode="numeric"
-                                value={editEstimate}
-                                placeholder="所要"
-                                onChange={(e) => setEditEstimate(e.target.value)}
+                                type="time"
+                                value={editStart}
+                                onChange={(e) => setEditStart(e.target.value)}
                                 onKeyDown={handleEditKeyDown}
-                                aria-label="所要時間（分）"
-                                className="w-14 rounded-md border border-line bg-paper px-1.5 py-1 text-xs"
+                                className="mt-1 w-full rounded-md border border-line bg-paper px-2 py-1.5 text-sm text-ink"
                               />
-                              分
                             </label>
-                            <div className="ml-auto flex items-center gap-1">
-                              <button
-                                onClick={saveEdit}
-                                aria-label="保存"
-                                className="rounded-full bg-plan p-1.5 text-white transition hover:opacity-90"
-                              >
-                                <Check size={13} />
-                              </button>
-                              <button
-                                onClick={cancelEdit}
-                                aria-label="キャンセル"
-                                className="rounded-full bg-ink/10 p-1.5 text-ink/50 transition hover:bg-ink/20"
-                              >
-                                <X size={13} />
-                              </button>
-                            </div>
+                            <label className="block text-xs text-ink/50">
+                              終了
+                              <input
+                                type="time"
+                                value={editEnd}
+                                onChange={(e) => setEditEnd(e.target.value)}
+                                onKeyDown={handleEditKeyDown}
+                                className="mt-1 w-full rounded-md border border-line bg-paper px-2 py-1.5 text-sm text-ink"
+                              />
+                            </label>
+                          </div>
+                          <label className="block text-xs text-ink/50">
+                            所要時間（分）
+                            <input
+                              type="number"
+                              min={1}
+                              max={1440}
+                              inputMode="numeric"
+                              value={editEstimate}
+                              placeholder="未設定"
+                              onChange={(e) => setEditEstimate(e.target.value)}
+                              onKeyDown={handleEditKeyDown}
+                              className="mt-1 w-28 rounded-md border border-line bg-paper px-2 py-1.5 text-sm text-ink"
+                            />
+                          </label>
+                          <div className="flex justify-end gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={cancelEdit}
+                              className="rounded-full bg-ink/10 px-4 py-1.5 text-xs font-semibold text-ink/60 hover:bg-ink/20"
+                            >
+                              キャンセル
+                            </button>
+                            <button
+                              type="button"
+                              onClick={saveEdit}
+                              className="rounded-full bg-plan px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+                            >
+                              保存
+                            </button>
                           </div>
                         </div>
-                      ) : (
+                      </EditSheet>
+
                         <div className="flex items-center gap-1.5">
                           <span
                             {...draggableProvided.dragHandleProps}
@@ -384,7 +407,7 @@ export default function TaskList({
                           <button
                             onClick={() => startEdit(task)}
                             aria-label="編集"
-                            className="rounded-full p-1 text-ink/20 opacity-0 transition hover:text-plan group-hover:opacity-100"
+                            className="rounded-full p-1 text-ink/20 opacity-0 transition hover:text-plan group-hover:opacity-100 [@media(hover:none)]:opacity-100"
                           >
                             <Pencil size={13} />
                           </button>
@@ -403,14 +426,12 @@ export default function TaskList({
                           <button
                             onClick={() => onDelete(task.id)}
                             aria-label="削除"
-                            className="rounded-full p-1 text-ink/20 opacity-0 transition hover:text-over group-hover:opacity-100"
+                            className="rounded-full p-1 text-ink/20 opacity-0 transition hover:text-over group-hover:opacity-100 [@media(hover:none)]:opacity-100"
                           >
                             <Trash2 size={14} />
                           </button>
                         </div>
-                      )}
-
-                      {!isEditing && diff && (
+                      {diff && (
                         <div className="mt-1.5 space-y-1 pl-[1.9rem] text-[11px]">
                           {linked.length === 0 ? (
                             <span className="inline-block rounded-full border border-dashed border-line px-2 py-0.5 text-ink/40">

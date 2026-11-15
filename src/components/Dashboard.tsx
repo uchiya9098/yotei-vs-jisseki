@@ -1,6 +1,7 @@
 "use client";
 
 import type { ActualCandidate } from "@/lib/parse-actual";
+import { collapseOut } from "@/lib/motion";
 import { buildEstimateIndex, getHistorySinceKey } from "@/lib/estimate-reference";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DragDropContext, type DropResult } from "@hello-pangea/dnd";
@@ -194,6 +195,9 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
     if (ok) loadData();
   };
 
+  // 削除アニメーション中の行（二重操作防止）
+  const removingRef = useRef(new Set<string>());
+
   const deleteTask = async (taskId: string) => {
     // 紐づく実績は削除されず「予定外」として残る（DBは on delete set null）。事前に知らせる
     const linkedCount = actuals.filter((a) => a.task_id === taskId).length;
@@ -203,9 +207,23 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
     ) {
       return;
     }
-    const ok = await adapter.deleteTask(taskId);
-    if (ok) loadData();
-    else setActionError("予定の削除に失敗しました。時間をおいてもう一度お試しください。");
+    if (removingRef.current.has(`task-${taskId}`)) return; // 連打による二重削除を防ぐ
+    removingRef.current.add(`task-${taskId}`);
+
+    // 行を短くたたみながら削除を実行し、両方が終わってから一覧から取り除く
+    // （下の項目が一瞬で詰まらず、画面が飛ばない）。
+    const anim = collapseOut(document.querySelector<HTMLElement>(`[data-row-id="task-${taskId}"]`));
+    const [ok] = await Promise.all([adapter.deleteTask(taskId), anim.finished]);
+    removingRef.current.delete(`task-${taskId}`);
+    if (!ok) {
+      anim.restore();
+      setActionError("予定の削除に失敗しました。時間をおいてもう一度お試しください。");
+      return;
+    }
+    setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    // 紐づいていた実績は削除されず「予定外」として残る（再取得を待たず、同じ見た目に先に揃える）
+    setActuals((prev) => prev.map((a) => (a.task_id === taskId ? { ...a, task_id: null } : a)));
+    loadData(); // 念のためサーバーの状態と同期
   };
 
   // タイトル・時間などの編集用（インライン編集モードの保存で使う汎用更新）
@@ -346,9 +364,18 @@ export default function Dashboard({ userId, userAvatar, userName }: Props) {
   };
 
   const deleteActual = async (id: string) => {
-    const ok = await adapter.deleteActual(id);
-    if (ok) loadData();
-    else setActionError("実績の削除に失敗しました。時間をおいてもう一度お試しください。");
+    if (removingRef.current.has(`actual-${id}`)) return;
+    removingRef.current.add(`actual-${id}`);
+    const anim = collapseOut(document.querySelector<HTMLElement>(`[data-row-id="actual-${id}"]`));
+    const [ok] = await Promise.all([adapter.deleteActual(id), anim.finished]);
+    removingRef.current.delete(`actual-${id}`);
+    if (!ok) {
+      anim.restore();
+      setActionError("実績の削除に失敗しました。時間をおいてもう一度お試しください。");
+      return;
+    }
+    setActuals((prev) => prev.filter((a) => a.id !== id));
+    loadData();
   };
 
   // --------------------------------------------------------
